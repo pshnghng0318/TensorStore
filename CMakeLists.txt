@@ -20,4 +20,3 @@ target_link_libraries(
   PRIVATE
     tensorstore::tensorstore tensorstore::all_drivers
 )
-
