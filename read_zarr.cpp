@@ -6,166 +6,274 @@
 #include <iostream>
 #include <fstream>
 #include <chrono>
-#include <execution>
 #include <vector>
 #include <cmath>
-#include <algorithm>    
+#include <mpi.h>
 
 namespace ts = tensorstore;
 
-int main() {
-    std::ofstream outfile("result1.dat", std::ios::app);
-    nlohmann::json spec = {
-        {"driver", "zarr"},
-        {"kvstore", {
-            {"driver", "file"},
-            {"path", "alma16G.zarr"}
-        }},
-        {"dtype", "float32"},
-    };
+int main(int argc, char** argv) {
+    MPI_Init(&argc, &argv);
+    int rank, size;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    //const std::string zarr_path = "alma16G.zarr";
+    const std::string zarr_path = "askap_hydra_extragalactic_128.zarr/SKY";
+    constexpr int zarr_dim = 5;
+    std::ofstream outfile("result" + std::to_string(size) + "_12G.dat", std::ios::app);
     
-    // Open
-    auto open_future = ts::Open<float, 4>(spec, ts::Context::Default());
-    auto result = open_future.result();
-    if (!result.ok()) {
-        std::cerr << "Failed to open Zarr: " << result.status() << "\n";
-        return 1;
-    }
-    ts::TensorStore<float, 4> store = *result;
+    const int bitpix = 4;  // float32 = 4 bytes
 
-    // Shapes & number of elements
-    auto shape = store.domain().shape();
-    //auto shape = std::array<ts::Index, 4>{1, 59516, 256, 256};
-    std::array<ts::Index, 4> chunk_shape = {1, 1024, 256, 256}; 
-    int freq_step = chunk_shape[1];
-    std::size_t total_elements = 1;
-    for (auto dim : chunk_shape) {
-        total_elements *= dim;
-    }
-    std::cout << "Total elements in a chunk: " << total_elements << "\n";
+    ts::Index npixels = 0, n_channels = 0, n_x = 0, n_y = 0;
+    ts::Index less_pixels = 0, less_channels = 0;
 
-    // Create an 1D array with lens of a chunk
-    std::vector<float> array_1d(total_elements);
-    
-    // Initializing specs for chunks
-    nlohmann::json spec_chunk[shape[1]/freq_step + 1];
-    std::vector<float> spectrum(shape[1], 0.0f);
-    std::vector<int> valid_pixels(shape[1], 0);
-    int channels = shape[1];
-    int n_x = shape[2];
-    int n_y = shape[3];
+    std::vector<ts::Index> shape_vec(zarr_dim, 0);
+    //int chunk_size = 1024;
+    int chunk_size = 64;
 
-    // Initializing timer
-    double io_time = 0;
-    double compute_time = 0;
-    double total_time = 0;
-    // If isnan is not defined
-    using std::isnan;
+    double io_time = 0.0;
+    double compute_time = 0.0;
+    double total_time = 0.0;
+    MPI_Bcast(&io_time, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&compute_time, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&total_time, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
 
-    for (int i_start = 0; i_start < shape[1]/freq_step; ++i_start) {
-        // Calculate the frequency range for each chunk
-        int f_start = i_start * freq_step;
-        int f_end = std::min<int>(f_start + freq_step, shape[1]);
-        int f_len = f_end - f_start;
+    //MPI_Barrier(MPI_COMM_WORLD);
+    auto total_start = std::chrono::high_resolution_clock::now();
 
-        // setup spec for each chunk
-        spec_chunk[i_start] = {
+    //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes before starting I/O
+    auto io_start = std::chrono::high_resolution_clock::now();
+
+    if (rank == 0) {
+        // Replace the 1st number with your Zarr file settings
+        
+        nlohmann::json spec = {
             {"driver", "zarr"},
             {"kvstore", {
                 {"driver", "file"},
-                {"path", "alma16G.zarr"}
+                {"path", zarr_path}
             }},
             {"dtype", "float32"},
-            {"transform", {
-                {"input_shape", {1, chunk_shape[1], shape[2], shape[3]}},
-                {"output", {
-                    {
-                        {"input_dimension", 0},
-                        {"offset", 0},
-                        {"stride", 1}
-                    },
-                    {
-                        {"input_dimension", 1},
-                        {"offset", f_start},
-                        {"stride", 1}
-                    },
-                    {
-                        {"input_dimension", 2},
-                        {"offset", 0},
-                        {"stride", 1}
-                    },
-                    {
-                        {"input_dimension", 3},
-                        {"offset", 0},
-                        {"stride", 1}
-                    }
-                }}
-            }}
         };
 
-        // Reading zarr
-        auto total_start = std::chrono::high_resolution_clock::now();
-        auto io_start = std::chrono::high_resolution_clock::now();
-        auto open_future_chunk = ts::Open<float, 4>(spec_chunk[i_start], ts::Context::Default());
-        auto result_chunk = open_future_chunk.result();
-        if (!result_chunk.ok()) {
-            std::cerr << "Failed to open Zarr: " << result_chunk.status() << "\n";
+        nlohmann::json context_spec = {
+            {"cache_pool", {
+                {"total_bytes_limit", 64 << 20}
+            }}
+        };
+        auto context_result = ts::Context::FromJson(context_spec);
+        if (!context_result.ok()) {
+            std::cerr << "Failed to create context: " << context_result.status() << "\n";
             return 1;
         }
-        ts::TensorStore<float, 4> store_chunk = *result_chunk;
-        auto slice_result = ts::Read(store_chunk).result();
-        if (!slice_result.ok()) {
-            std::cerr << "Read failed: " << slice_result.status() << "\n";
-            continue;
+        auto context = *context_result;
+
+        //auto result_shape = ts::Open<float, 4>(spec, context).result();
+        auto result_shape = ts::Open<float, zarr_dim>(spec, context).result();
+        if (!result_shape.ok()) {
+            std::cerr << "Open failed: " << result_shape.status() << "\n";
+            MPI_Abort(MPI_COMM_WORLD, 1);
         }
-        auto array_chunk = *slice_result;
 
-        // Catch a 1D array by pointers
-        float* ptr_chunk = array_chunk.data();
-        std::size_t total_size_chunk = array_chunk.num_elements();
-        //array_1d.insert(array_1d.end(), ptr_chunk, ptr_chunk + total_size_chunk);
-        array_1d = std::vector<float>(ptr_chunk, ptr_chunk + total_size_chunk);
+        auto store = *result_shape;
+        auto shape = store.domain().shape();
+        //std::cout << "Shape: " << shape << "\n";
 
-        auto io_end = std::chrono::high_resolution_clock::now();
+        n_channels = shape[1];
+        n_x = shape[zarr_dim-2];
+        n_y = shape[zarr_dim-1];
+        npixels = ts::Index(n_channels) * n_x * n_y;
+
+        //std::cout << "Chunk size: " << chunk_size << "\n";
+        if (zarr_dim == 5) {
+            shape_vec = {shape[0], chunk_size, shape[2], shape[3], shape[4]};
+        } else if (zarr_dim == 4) {
+            shape_vec = {shape[0], chunk_size, shape[2], shape[3]};
+        } else {
+            std::cerr << "Unsupported Zarr dimension: " << zarr_dim << "\n";
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        
+        ts::Index mem_pixels = size * chunk_size * n_x * n_y;
+        if (npixels > mem_pixels) {
+            less_pixels = mem_pixels;
+            less_channels = size * chunk_size;
+        } else {
+            less_pixels = npixels;
+            less_channels = n_channels;
+        }
+        store = {};
+        //result_shape = {};
+    }
+    //std::cout << "less_channels: " << less_channels << "\n";
+
+    // Broadcast shared metadata
+    //MPI_Bcast(shape_vec.data(), 4, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(shape_vec.data(), zarr_dim, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&npixels, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&n_channels, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&n_x, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&n_y, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&less_pixels, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&less_channels, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
+
+    std::vector<float> local_spectrum(n_channels, 0.0f);
+    std::vector<int> local_valid(n_channels, 0);
+    std::vector<float> global_spectrum(n_channels, 0.0f);
+    std::vector<int> global_valid(n_channels, 0);
+
+    ts::Index total_loops = (npixels / less_pixels) + ((npixels % less_pixels) ? 1 : 0);
+    //std::cout << "Rank " << rank << " processing " << total_loops << " loops with " << less_pixels << " pixels per loop.\n";
+    //std::cout << "Shape: " << shape_vec[0] << " x " << shape_vec[1] << " x " << shape_vec[2] << " x " << shape_vec[3] << "\n";
+    //std::cout << "Total pixels: " << npixels << ", Channels: " << n_channels << ", X: " << n_x << ", Y: " << n_y << "\n";
+    //std::cout << "Less pixels: " << less_pixels << ", Less channels: " << less_channels << "\n";
+    //std::cout << "Rank " << rank << " will process " << less_channels << " channels per loop.\n";
+    //std::cout << "Rank " << rank << " will process " << total_loops << " total loops.\n";
+
+    bool no_chunks = false;
+    ts::Index my_channels = chunk_size;
+
+    //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes after I/O
+    auto io_end = std::chrono::high_resolution_clock::now();
+    if (rank == 0) {
         io_time += std::chrono::duration<double>(io_end - io_start).count();
+    }
 
-        // Calculate specturm
+    for (ts::Index nloop = 0; nloop < total_loops; ++nloop) {
+        if (rank == 0) {
+            std::cout << "Processing loop " << nloop + 1 << " of " << total_loops << "\n";
+        }
+        // Time I/O
+        //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes before starting I/O
+        auto io_start = std::chrono::high_resolution_clock::now();
+
+        // Each rank read a chunk from ch_start to ch_start + ch_len
+        ts::Index ch_start = nloop * less_channels + (rank * chunk_size);
+        if (n_channels - nloop * less_channels - rank * chunk_size > chunk_size) {
+            my_channels = chunk_size;
+        } else if (n_channels - nloop * less_channels - rank * chunk_size > 0) {
+            my_channels = n_channels - nloop * less_channels - rank * chunk_size;
+        } else{
+            no_chunks = true;
+        }
+        //std::cout << nloop << " : Rank " << rank << " processing " << my_channels << " channels from " << ch_start << "\n";
+        ts::Index chunk_elements = my_channels * n_x * n_y;
+        std::vector<float> chunk_data(chunk_elements);
+        int rank_channels = my_channels;
+  
+        if (!no_chunks) {
+            nlohmann::json chunk_spec = {
+                {"driver", "zarr"},
+                {"kvstore", {
+                    {"driver", "file"},
+                    {"path", zarr_path}
+                }},
+                {"dtype", "float32"},
+                {"transform", {
+                    //{"input_shape", {shape_vec[0], my_channels, shape_vec[2], shape_vec[3]}},
+                    {"input_shape", {shape_vec[0], my_channels, shape_vec[2], shape_vec[3], shape_vec[4]}},
+                    {"output", {
+                        //{{"input_dimension", 0}, {"offset", 0}, {"stride", 1}},
+                        //{{"input_dimension", 1}, {"offset", ch_start}, {"stride", 1}},
+                        //{{"input_dimension", 2}, {"offset", 0}, {"stride", 1}},
+                        //{{"input_dimension", 3}, {"offset", 0}, {"stride", 1}},
+                        {{"input_dimension", 0}, {"offset", 0}, {"stride", 1}},
+                        {{"input_dimension", 1}, {"offset", ch_start}, {"stride", 1}},
+                        {{"input_dimension", 2}, {"offset", 0}, {"stride", 1}},
+                        {{"input_dimension", 3}, {"offset", 0}, {"stride", 1}},
+                        {{"input_dimension", 4}, {"offset", 0}, {"stride", 1}},
+                    }}
+                }}
+            };
+            //auto result = ts::Open<float, 4>(chunk_spec, ts::Context::Default()).result();
+            auto result = ts::Open<float, zarr_dim>(chunk_spec, ts::Context::Default()).result();
+            if (!result.ok()) MPI_Abort(MPI_COMM_WORLD, 1);
+            auto read_result = ts::Read(*result).result();
+            if (!read_result.ok()) {
+                std::cerr << "Read failed: " << read_result.status() << "\n";
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+            auto array_chunk = *read_result;
+            float* ptr = array_chunk.data();
+            std::copy(ptr, ptr + chunk_elements, chunk_data.begin());
+            array_chunk = {};
+        }
+        //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes after I/O
+        auto io_end = std::chrono::high_resolution_clock::now();
+        if (rank == 0) {
+            io_time += std::chrono::duration<double>(io_end - io_start).count();
+        }
+
+        // Time computation
+        //MPI_Barrier(MPI_COMM_WORLD);
         auto compute_start = std::chrono::high_resolution_clock::now();
-        long my_pixels = chunk_shape[1] * shape[2] * shape[3];
-        for (long iter = 0; iter < my_pixels; ++iter) {
-            if (!isnan(array_1d[iter])) {
-                long ch = (iter+i_start*my_pixels) / (n_x * n_y);
-                spectrum[ch] += array_1d[iter];
-                valid_pixels[ch] += 1;
-                if ((iter + 1) % (n_x * n_y) == 0) {
-                    spectrum[ch] /= valid_pixels[ch];
+
+        // Divide the chunk data among ranks
+        for (ts::Index ch = 0; ch < my_channels; ++ch) {
+            
+            ts::Index global_ch = ch_start + ch;
+            //if ((global_ch % size) != rank) continue;
+
+            for (ts::Index i = 0; i < n_x * n_y; ++i) {
+
+                float val = chunk_data[ch * n_x * n_y + i];
+
+                if (!std::isnan(val)) {
+                    local_spectrum[global_ch] += val;
+                    local_valid[global_ch] += 1;
                 }
             }
+            if (local_valid[global_ch] > 0){
+                local_spectrum[global_ch] /= local_valid[global_ch];
+            }
         }
-        // clear array
-        std::vector<float>().swap(array_1d);
+        
+        //std::cout << nloop << ": Rank " << rank << " finished processing chunk with " << ch_len << " channels.\n";
+        chunk_data.clear();
+        chunk_data.shrink_to_fit();
 
+        //MPI_Barrier(MPI_COMM_WORLD);
         auto compute_end = std::chrono::high_resolution_clock::now();
+        if (rank == 0) {
+            compute_time += std::chrono::duration<double>(compute_end - compute_start).count();
+        }
+    }
+
+    // Time computation
+    //MPI_Barrier(MPI_COMM_WORLD);
+    auto compute_start = std::chrono::high_resolution_clock::now();
+
+    // Gather spectrum
+    MPI_Reduce(local_spectrum.data(), global_spectrum.data(), n_channels, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
+
+    //MPI_Barrier(MPI_COMM_WORLD);
+    auto compute_end = std::chrono::high_resolution_clock::now();
+
+    if (rank == 0) {
         compute_time += std::chrono::duration<double>(compute_end - compute_start).count();
-        auto total_end = std::chrono::high_resolution_clock::now();
+        //std::cout << compute_time << std::endl;
+    }
+    //MPI_Barrier(MPI_COMM_WORLD);
+    auto total_end = std::chrono::high_resolution_clock::now();
+    if (rank == 0) {
         total_time += std::chrono::duration<double>(total_end - total_start).count();
-        std::cout << total_time << " " << io_time << " " << compute_time << " sec." << std::endl;
+        //std::cout << total_time << std::endl;
+    }
+    if (rank == 0) {
+        std::cout << "I/O time: " << io_time << " seconds\n";
+        std::cout << "Compute time: " << compute_time << " seconds\n";
+        std::cout << "Total time: " << total_time << " seconds\n";
+        outfile << total_time << " " << io_time << " " << compute_time << " sec." << std::endl;
     }
 
-    // Output the time taken for each step
-    outfile << total_time << " " << io_time << " " << compute_time << " sec." << std::endl;
-
-    // Output spectrum
-    std::ofstream output("spectrum.dat");
-    if (!output.is_open()) {
-        std::cerr << "Failed to open output file.\n";
-        return 1;
+    if (rank == 0) {
+        std::ofstream output("spectrum_12G.dat");
+        for (ts::Index ch = 0; ch < n_channels; ++ch) {
+            output << ch << " " << global_spectrum[ch] << "\n";
+        }
     }
-    for (ts::Index ch = 0; ch < shape[1]; ++ch) {
-        output << ch << " " << spectrum[ch] << "\n";
-    }
-    output.close();
 
+    MPI_Finalize();
     return 0;
 }
-
