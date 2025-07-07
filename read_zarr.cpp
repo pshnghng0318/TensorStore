@@ -59,7 +59,7 @@ int main(int argc, char** argv) {
 
         nlohmann::json context_spec = {
             {"cache_pool", {
-                {"total_bytes_limit", 64 << 20}
+                {"total_bytes_limit", 256 << 20}
             }}
         };
         auto context_result = ts::Context::FromJson(context_spec);
@@ -83,6 +83,7 @@ int main(int argc, char** argv) {
         n_channels = shape[1];
         n_x = shape[zarr_dim-2];
         n_y = shape[zarr_dim-1];
+        std::cout << "Channels: " << n_channels << ", X: " << n_x << ", Y: " << n_y << "\n";
         npixels = ts::Index(n_channels) * n_x * n_y;
 
         //std::cout << "Chunk size: " << chunk_size << "\n";
