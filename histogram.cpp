@@ -25,6 +25,34 @@ int main(int argc, char** argv) {
     //const std::string zarr_path = "alma16G.zarr";
     //const std::string zarr_path = "askap_hydra_extragalactic_128_v2.zarr/SKY";
     const std::string zarr_path = "as_128_3D.zarr/data";
+
+    // open binary directly
+    if (rank == 0) {
+        const std::string filename = "as_128_3D.zarr/data/0.0.0.0";
+        std::ifstream file(filename, std::ios::binary);
+        if (!file) {
+            std::cerr << "No file named: " << filename << std::endl;
+            return 1;
+        }
+        file.seekg(0, std::ios::end);
+        std::streamsize filesize = file.tellg();
+        file.seekg(0, std::ios::beg);
+
+        if (filesize % sizeof(float) != 0) {
+            std::cerr << "Data is not float!" << std::endl;
+            return 1;
+        }
+        std::vector<float> first_data(filesize / sizeof(float));
+        if (!file.read(reinterpret_cast<char*>(first_data.data()), filesize)) {
+            std::cerr << "Read failed!" << std::endl;
+            return 1;
+        }
+        for (size_t i = 0; i < std::min(first_data.size(), size_t(20)); ++i) {
+            std::cout << "data[" << i << "] = " << first_data[i] << std::endl;
+        }
+
+    }
+
     constexpr int zarr_dim = 4;
     //constexpr int zarr_dim = 5;
     std::ofstream outfile("result" + std::to_string(size) + "_12G.dat", std::ios::app);
@@ -37,7 +65,7 @@ int main(int argc, char** argv) {
     std::vector<ts::Index> shape_vec(zarr_dim, 0);
     //int chunk_size = 1024;
     // 64 channels
-    int chunk_size = 64;
+    int chunk_size = 16;
     //int chunk_size = 1;
 
     double io_open_time = 0.0;
@@ -100,11 +128,9 @@ int main(int argc, char** argv) {
 
         //std::cout << "Chunk size: " << chunk_size << "\n";
         if (zarr_dim == 5) {
-            //shape_vec = {shape[0], chunk_size, shape[2], 256, 256};
-            shape_vec = {shape[0], 1, shape[2], 256, 256};
+            shape_vec = {shape[0], chunk_size, shape[2], 256, 256};
         } else if (zarr_dim == 4) {
-            //shape_vec = {shape[0], chunk_size, 256, 256};
-            shape_vec = {shape[0], 64, 256, 256};
+            shape_vec = {shape[0], chunk_size, 256, 256};
         } else {
             std::cerr << "Unsupported Zarr dimension: " << zarr_dim << "\n";
             MPI_Abort(MPI_COMM_WORLD, 1);
@@ -232,18 +258,17 @@ int main(int argc, char** argv) {
                     {"path", zarr_path}
                 }},
                 {"metadata", {
-                    {"chunks", {1, 64, 256, 256}},
+                    {"chunks", {1, shape_vec[1], shape_vec[2], shape_vec[3]}},
                     {"compressor", nullptr},
                     {"dtype", "<f4"},
                     {"fill_value", 0.0},
                     {"filters", nullptr},
                     {"order", "C"},
-                    {"shape", {1, 128, 7763, 4742}},
+                    {"shape", {1, shape[1], shape[2], shape[3]}},
                     {"zarr_format", 2}
                 }},
                 {"dtype", "float32"},
-                {"transform", {
-                    //{"input_shape", {shape_vec[0], my_channels, my_nx, my_ny}},
+                {"transform", { 
                     {"input_shape", {shape_vec[0], my_channels, my_nx, my_ny}},
                     {"output", {
                         {{"input_dimension", 0}, {"offset", 0}, {"stride", 1}},
@@ -255,8 +280,8 @@ int main(int argc, char** argv) {
                 }}
             };
             //auto result = ts::Open<float, 4>(chunk_spec, ts::Context::Default()).result();
-            //auto result = ts::Open<float, zarr_dim>(chunk_spec, ts::Context::Default()).result();
-            auto result = Open(chunk_spec, ts::ReadWriteMode::read).result();
+            auto result = ts::Open<float, zarr_dim>(chunk_spec, ts::Context::Default()).result();
+            //auto result = Open(chunk_spec, ts::ReadWriteMode::read).result();
             //auto result = ts::Open<ts::shared_array<void>, zarr_dim>(chunk_spec, context).result();
             
             if (!result.ok()) {
@@ -278,15 +303,17 @@ int main(int argc, char** argv) {
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
             
+
             //tensorstore::SharedArray<float, 4> array = tensorstore::Cast<float, 4>(*read_result);
             //ts::SharedArray<float, 4> array = static_cast<ts::SharedArray<float, 4>>(*read_result);
 
-            auto& arr = *read_result;
-            if (!arr.data()) {
-                std::cerr << "arr.data() is nullptr! Possibly invalid read.\n";
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            }
-            float* array = static_cast<float*>(arr.data());
+            // if open with ts::ReadWriteMode::read
+            // auto& arr = *read_result;
+            // if (!arr.data()) {
+            //     std::cerr << "arr.data() is nullptr! Possibly invalid read.\n";
+            //     MPI_Abort(MPI_COMM_WORLD, 1);
+            // }
+            // float* array = static_cast<float*>(arr.data());
 
             //std::cout << ith_chunk << " shape = ";
             //for (auto s : arr.shape()) std::cout << s << " ";
@@ -312,6 +339,12 @@ int main(int argc, char** argv) {
                 io_read_time += std::chrono::duration<double>(io_read_end - io_read_start).count();
             }
 
+            if (ith_chunk == 0) {
+                for (int i = 0; i < 20; ++i) {
+                    std::cout << read_result->data()[i] << std::endl;
+                }
+            }
+
             // Time computation
             //MPI_Barrier(MPI_COMM_WORLD);
             auto compute_start = std::chrono::high_resolution_clock::now();
@@ -319,9 +352,9 @@ int main(int argc, char** argv) {
             for (ts::Index i = 0;  i < my_nx * my_ny; ++i) {
                 //auto ith_element = chunk_data[i];
                 //auto ith_element = array_chunk.data()[i];
-                //auto ith_element = read_result->data()[i];
+                auto ith_element = read_result->data()[i];
                 
-                float ith_element = array[i];
+                //float ith_element = array[i];
                 
                 if (!std::isnan(ith_element)) {
                     //if (ith_chunk == 0) std::cout << ith_element << std::endl;
@@ -351,8 +384,9 @@ int main(int argc, char** argv) {
             for (ts::Index i = 0; i < my_nx * my_ny; ++i) {
                 //float value = chunk_data[i];
                 //float value = array_chunk.data()[i];
-                //float value = read_result->data()[i];
-                float value = array[i];
+                float value = read_result->data()[i];
+                //float value = array[i];
+
                 if (!std::isnan(value)) {
                     //relative_value =  255 * (value - min[ith_chunk]) / (*max - min[ith_chunk]);
                     if (max_values[ith_chunk] - min_values[ith_chunk] != 0) { 
@@ -365,7 +399,7 @@ int main(int argc, char** argv) {
                 }
             }
             //array_chunk = {};
-            array = {};
+            //array = {};
 
             //std::cout << nloop << ": Rank " << rank << " finished processing chunk with " << ch_len << " channels.\n";
             //chunk_data.clear();
