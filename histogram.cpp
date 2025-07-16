@@ -11,8 +11,6 @@
 #include <vector>
 #include <cmath>
 #include <mpi.h>
-//#include <omp.h>
-
 
 namespace ts = tensorstore;
 
@@ -25,35 +23,14 @@ int main(int argc, char** argv) {
 
     // const std::string zarr_path = "alma16G.zarr";
     // const std::string zarr_path = "askap_hydra_extragalactic_128_v2.zarr/SKY";
-    // const std::string zarr_path = "as_128_3D.zarr/data";
+    // const std::string zarr_path = "as_128_3D_lz4.zarr/data";
     const std::string zarr_path = "as_128_3D.zarr/data";
+
     int file_num[4] = {0, 0, 0, 0};
     std::string file_num_string;
     bool compressor = false;
     std::vector<long long int> rank_pixels(size, 0);
     std::vector<long long int> total_pixels(size, 0);
-
-    // open binary directly
-    // if (rank == 0) {
-    //     file_num_string = std::to_string(file_num[0]) + 
-    //                 '.' + std::to_string(file_num[1]) + 
-    //                 '.' + std::to_string(file_num[2]) + 
-    //                 '.' + std::to_string(file_num[0]);
-    //     std::ifstream file(zarr_path + '/' + file_num_string, std::ios::binary);
-    //     std::cout << zarr_path + '/' + file_num_string << std::endl; 
-    //     if (!file) {
-    //         std::cerr << "No file named: " << zarr_path << '/' << file_num_string << std::endl;
-    //         return 1;
-    //     }
-    //     std::vector<float> first_data(256*256);
-    //     if (!file.read(reinterpret_cast<char*>(first_data.data()), 256*256)) {
-    //         std::cerr << "Read failed!" << std::endl;
-    //         return 1;
-    //     }
-    //     for (size_t i = 0; i < std::min(first_data.size(), size_t(20)); ++i) {
-    //         std::cout << "data[" << i << "] = " << first_data[i] << std::endl;
-    //     }
-    // }
 
     constexpr int zarr_dim = 4;
     std::ofstream outfile("result" + std::to_string(size) + "_12G.dat", std::ios::app);
@@ -76,13 +53,11 @@ int main(int argc, char** argv) {
     //MPI_Barrier(MPI_COMM_WORLD);
     auto total_start = std::chrono::high_resolution_clock::now();
 
-    //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes before starting I/O
+    //MPI_Barrier(MPI_COMM_WORLD);
     auto io_start = std::chrono::high_resolution_clock::now();
     std::vector<ts::Index> shape(zarr_dim, 0);
 
     if (rank == 0) {
-        // Replace the 1st number with your Zarr file settings
-        
         nlohmann::json spec = {
             {"driver", "zarr"},
             {"kvstore", {
@@ -103,8 +78,6 @@ int main(int argc, char** argv) {
             return 1;
         }
         auto context = *context_result;
-
-        //auto result_shape = ts::Open<float, 4>(spec, context).result();
         auto result_shape = ts::Open<float, zarr_dim>(spec, context).result();
         if (!result_shape.ok()) {
             std::cerr << "Open failed: " << result_shape.status() << "\n";
@@ -112,17 +85,15 @@ int main(int argc, char** argv) {
         }
 
         auto store = *result_shape;
-        //shape = store.domain().shape();
         auto shape_span = store.domain().shape();
         shape.assign(shape_span.begin(), shape_span.end());
 
         n_channels = shape[1];
         n_x = shape[zarr_dim-2];
         n_y = shape[zarr_dim-1];
-        std::cout << "Channels: " << n_channels << ", X: " << n_x << ", Y: " << n_y << "\n";
+        // std::cout << "Channels: " << n_channels << ", X: " << n_x << ", Y: " << n_y << "\n";
         npixels = ts::Index(n_channels) * n_x * n_y;
 
-        //std::cout << "Chunk size: " << chunk_size << "\n";
         if (zarr_dim == 5) {
             shape_vec = {shape[0], chunk_size[1], shape[2], chunk_size[3], chunk_size[4]};
         } else if (zarr_dim == 4) {
@@ -141,15 +112,15 @@ int main(int argc, char** argv) {
                 std::cerr << "Failed to convert spec to JSON: " << spec_json_result.status() << "\n";
             } else {
                 const auto& spec_json = *spec_json_result;
-                std::cout << spec_json << std::endl;
+                // std::cout << spec_json << std::endl;
 
                 if (spec_json.contains("metadata")) {
                     const auto& metadata = spec_json["metadata"];
                     if (metadata.contains("compressor") && !metadata["compressor"].is_null()) {
-                        std::cout << "Compressor: " << metadata["compressor"]["id"] << "\n";
+                        // std::cout << "Compressor: " << metadata["compressor"]["id"] << "\n";
                         compressor = true;
                     } else {
-                        std::cout << "No compressor (raw, uncompressed chunks)\n";
+                        // std::cout << "No compressor (raw, uncompressed chunks)\n";
                         compressor = false;
                     }
                 } else {
@@ -171,16 +142,16 @@ int main(int argc, char** argv) {
     MPI_Bcast(&less_channels, 1, MPI_LONG_LONG_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&compressor, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
     
-    std::cout << "shape: ";
-    for (ts::Index i = 0; i < shape.size(); ++i) {
-        std::cout << shape[i] << " ";
-    }
-    std::cout << std::endl;
-    std::cout << "shape_vec: ";
-    for (ts::Index i = 0; i < shape_vec.size(); ++i) {
-        std::cout << shape_vec[i] << " ";
-    }
-    std::cout << std::endl;
+    // std::cout << "shape: ";
+    // for (ts::Index i = 0; i < shape.size(); ++i) {
+    //     std::cout << shape[i] << " ";
+    // }
+    // std::cout << std::endl;
+    // std::cout << "shape_vec: ";
+    // for (ts::Index i = 0; i < shape_vec.size(); ++i) {
+    //     std::cout << shape_vec[i] << " ";
+    // }
+    // std::cout << std::endl;
     //auto l_x = shape[3] / shape_vec[3] + ((shape[3] % shape_vec[3]) ? 1 : 0); // 30 + 1
     //auto l_y = shape[4] / shape_vec[4] + ((shape[4] % shape_vec[4]) ? 1 : 0); // 18 + 1
     auto l_x = shape[2] / shape_vec[2] + ((shape[2] % shape_vec[2]) ? 1 : 0); // 30 + 1
@@ -188,11 +159,9 @@ int main(int argc, char** argv) {
     // 64 channels
     //auto l_z = shape[1] / shape_vec[1] + ((shape[1] % shape_vec[1]) ? 1 : 0); // 2
     auto l_z = 1;
-    //std::cout << "l_x: " << l_x << ", l_y: " << l_y << ", l_z: " << l_z << "\n";
 
     //ts::Index total_chunks = l_x * l_y * l_z; // 31 * 19 * 2 = 1178
     ts::Index total_chunks = l_x * l_y * 1; // 31 * 19
-    //std::cout << "total chunks = " << total_chunks << std::endl;
     ts::Index total_loops = total_chunks / size + ((total_chunks % size) ? 1 : 0); // 1778 / 10 + 1 = 178
 
     // Initialize local and global histograms
@@ -206,17 +175,17 @@ int main(int argc, char** argv) {
     std::vector<float> max_values(total_chunks, -10000.0f);
     std::vector<float> min_values(total_chunks, 10000.0f);
 
-    //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes after I/O
+    //MPI_Barrier(MPI_COMM_WORLD);
     auto io_end = std::chrono::high_resolution_clock::now();
     if (rank == 0) {
         io_time += std::chrono::duration<double>(io_end - io_start).count();
     }
 
-    #pragma omp parallel for
     for (ts::Index nloop = 0; nloop < total_loops; ++nloop) {
         if (rank == 0) {
-            std::cout << "Processing loop " << nloop + 1 << " of " << total_loops << "\n";
+            std::cout << "Processing loop " << nloop + 1 << "th of " << total_loops << "\n";
         }
+
         // Time I/O
         //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes before starting I/O
         auto io_start = std::chrono::high_resolution_clock::now();
@@ -247,18 +216,12 @@ int main(int argc, char** argv) {
             ts::Index my_ny = (ith_chunk % xy_chunks) / l_x == l_y - 1 ? ny_last : shape_vec[3];
             
             ts::Index chunk_elements = my_channels * my_nx * my_ny;
-            //std::cout << nloop << " " << chunk_elements << " " << my_nx << " " << my_ny << std::endl;
-
-            //std::cout << ith_chunk << " " << ch_start << " " << px_start << " " << py_start << std::endl;
-            //std::cout << l_x << " " << l_y << " " << xy_chunks << " " << std::endl;
-            //std::cout << my_nx << " " << my_ny << " " << my_channels << std::endl;
-
-            //std::cout << "ith_chunk: " << ith_chunk << ", my_nx: " << my_nx << ", my_ny: " << my_ny << "\n";
 
             std::vector<float> chunk_data_ch1(chunk_elements);
-            //std::vector<float> chunk_data_ch1(shape_vec[2]*shape_vec[3]);
-        
+
+            // For using TensorStore to open the uncompressed zarr
             //compressor = true;
+
             if (compressor == true) {
                 nlohmann::json chunk_spec = {
                     {"driver", "zarr"},
@@ -288,10 +251,8 @@ int main(int argc, char** argv) {
                         }}
                     }}
                 };
-                //auto result = ts::Open<float, 4>(chunk_spec, ts::Context::Default()).result();
+
                 auto result = ts::Open<float, zarr_dim>(chunk_spec, ts::Context::Default()).result();
-                //auto result = Open(chunk_spec, ts::ReadWriteMode::read).result();
-                //auto result = ts::Open<ts::shared_array<void>, zarr_dim>(chunk_spec, context).result();
             
                 if (!result.ok()) {
                     std::cerr << "Open zarr failed: " << result.status() << "\n";
@@ -305,8 +266,8 @@ int main(int argc, char** argv) {
                 }
                 auto array_chunk = *read_result;
                 float* ptr = array_chunk.data();
-                // std::vector<float> chunk_data_ch1(chunk_elements);
                 std::copy(ptr, ptr + chunk_elements, chunk_data_ch1.begin());
+
             } else {
                 file_num[0] = 0;
                 file_num[1] = 0;
@@ -318,10 +279,8 @@ int main(int argc, char** argv) {
                         '.' + std::to_string(file_num[2]) + 
                         '.' + std::to_string(file_num[3]);
 
-                // std::cout << ith_chunk << " " << ith_chunk % l_x << " " << ith_chunk / l_x << " " << file_num_string << std::endl;
-
                 std::ifstream file(zarr_path + '/' + file_num_string, std::ios::binary);
-                // std::cout << zarr_path + '/' + file_num_string << std::endl; 
+
                 if (!file) {
                     std::cerr << "No file named: " << zarr_path << '/' << file_num_string << std::endl;
                     MPI_Abort(MPI_COMM_WORLD, 1);
@@ -340,38 +299,23 @@ int main(int argc, char** argv) {
                     }
 
                     // resize
-                    std::vector<float> chunk_data_ch1(shape_vec[2]*shape_vec[3], -10000.0f);
-                    
-                    int idx = 0;
+                    ts::Index idx = 0;
                     for (ts::Index i = 0; i < shape_vec[2] * shape_vec[3]; ++i) {
                         float full_val = chunk_data_full[i];
                         if (!std::isnan(full_val)) {
-                            chunk_data_ch1[i] = full_val;
+                            chunk_data_ch1[idx] = full_val;
                             idx++;
                         }
                     }
-                    chunk_data_ch1.resize(idx);
-                    std::cout << chunk_data_ch1.size() << " " << chunk_elements << std::endl;
-                    for (ts::Index i = 1;i < chunk_elements; ++i) {
-                        std::cout << i << " " << i%my_nx << " " << i/my_ny << " " << chunk_data_ch1[i] << std::endl;
-                    }
+                    // chunk_data_ch1.resize(idx);
                 }
             }
         
-            //MPI_Barrier(MPI_COMM_WORLD); // Synchronize all processes after I/O
+            //MPI_Barrier(MPI_COMM_WORLD);
             auto io_end = std::chrono::high_resolution_clock::now();
             if (rank == 0) {
                 io_time += std::chrono::duration<double>(io_end - io_start).count();
             }
-
-            // int count = 0;
-            // do {
-            //     //std::cout << count << " " << chunk_data_ch1[count] << std::endl;
-            //     count ++;
-            // } while (!isnan(chunk_data_ch1[count]) && count < chunk_elements);
-            // if (count < chunk_elements) {
-            //     std::cout << ith_chunk << ": no. " << count << "/" << chunk_elements << " is nan." << std::endl;
-            // }
 
             // Time computation
             //MPI_Barrier(MPI_COMM_WORLD);
@@ -382,20 +326,14 @@ int main(int argc, char** argv) {
                 float ith_element = chunk_data_ch1[i];
 
                 if (!std::isnan(ith_element)) {
-                    //if (ith_chunk == 0) std::cout << ith_element << std::endl;
                     if (ith_element < min_values[ith_chunk]){
                         min_values[ith_chunk] = ith_element;
-                        //std::cout << min_values[ith_chunk] << " " << ith_chunk << std::endl;
                     }
                     if (ith_element > max_values[ith_chunk]){
                         max_values[ith_chunk] = ith_element;
-                        //std::cout << max_values[ith_chunk] << " " << ith_chunk << std::endl;
                     }
-                } else {
-                    //std::cout << ith_chunk << " " << ith_element << " " << ch_start << " " << px_start << " " << py_start << std::endl;
                 }
             }
-            std::cout << "min, max = " << min_values[ith_chunk] << " " << max_values[ith_chunk] << " : " << my_nx << " " << my_ny << std::endl;
         
             for (ts::Index i = 0; i < chunk_elements; ++i) {
                 
@@ -404,44 +342,22 @@ int main(int argc, char** argv) {
 
                 if (!std::isnan(value)) {
                     
-                    //relative_value =  255 * (value - min[ith_chunk]) / (*max - min[ith_chunk]);
                     if (max_values[ith_chunk] - min_values[ith_chunk] != 0) { 
                         auto relative_value = static_cast<int>(255 * ((value - min_values[ith_chunk]) / (max_values[ith_chunk] - min_values[ith_chunk])));
                         local_histogram[ith_chunk * 256 + relative_value] += 1;
                         rank_pixels[rank] += 1;
                     }
-                } else {
-                    //std::cout << "nan: " << i << " " << my_nx << " " << my_nx << std::endl;
-                    //local_histogram[ith_chunk * 256 + 0] += 1;
                 }
             }
             chunk_data_ch1 = {};
-
-            //std::cout << nloop << ": Rank " << rank << " finished processing chunk with " << ch_len << " channels.\n";
-            //chunk_data.clear();
-            //chunk_data.shrink_to_fit();
 
             //MPI_Barrier(MPI_COMM_WORLD);
             auto compute_end = std::chrono::high_resolution_clock::now();
             if (rank == 0) {
                 compute_time += std::chrono::duration<double>(compute_end - compute_start).count();
             }
-            
         }
-        //MPI_Barrier(MPI_COMM_WORLD);
     }
-    MPI_Reduce(rank_pixels.data(), total_pixels.data(), size, MPI_LONG_LONG_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    if (rank == 0) {
-        long long int total_p = 0;
-        for (int i = 0; i < size; ++i) {
-            std::cout << i << " : " << total_pixels[i] << " pixels" << std::endl;
-            total_p += total_pixels[i];
-        }
-        std::cout << "Sum: " << total_p << " pixels" << std::endl;
-    }
-
-    //std::cout << "\nLoop ends.\n" << std::endl;
-    
 
     // Gather histogram
     MPI_Reduce(local_histogram.data(), global_histogram.data(), total_chunks*256, MPI_LONG_LONG_INT, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -452,13 +368,12 @@ int main(int argc, char** argv) {
     MPI_Reduce(min_values.data(), global_min_values.data(), total_chunks, MPI_FLOAT, MPI_MIN, 0, MPI_COMM_WORLD);
 
     auto final_histogram = std::vector<float>(256, 0.0f);
+
     // Time computation
     //MPI_Barrier(MPI_COMM_WORLD);
     auto compute_start = std::chrono::high_resolution_clock::now();
+
     if (rank == 0) {
-        // for (int i; i < total_chunks; ++i) {
-        //     std::cout << global_max_values[i] << std::endl;
-        // }
         // final min and max
         float final_max = -1;
         float final_min = 1;
@@ -472,28 +387,15 @@ int main(int argc, char** argv) {
                 //std::cout << final_min << std::endl;
             }
         }
-        //auto final_max = std::max_element(global_max_values.begin(), global_max_values.end());
-        //auto final_min = std::min_element(global_min_values.begin(), global_min_values.end());
+        // auto final_max = std::max_element(global_max_values.begin(), global_max_values.end());
+        // auto final_min = std::min_element(global_min_values.begin(), global_min_values.end());
         std::cout << "Final max: " << final_max << ", Final min: " << final_min << "\n";
 
         float final_range = final_max - final_min;
         std::cout << "Final range: " << final_range << "\n";
-    
-        // for (ts::Index i_chunk = 0; i_chunk < total_chunks; ++i_chunk) {
-        //     for (ts::Index i_value = 0; i_value < 256; ++i_value) {
-        //         // Accumulate the histogram values
-        //         //std::cout << "i_chunk range: " << (global_max_values[i_chunk] - global_min_values[i_chunk]) << std::endl;
-        //         if (global_max_values[i_chunk] - global_min_values[i_chunk] != 0) {
-        //             ts::Index final_index = int(i_value * final_range / (global_max_values[i_chunk] - global_min_values[i_chunk]));
-        //             final_histogram[final_index] += global_histogram[i_chunk * 256 + i_value];
-        //         }
-        //     }
-        // }
 
         std::ofstream output("histogram_12G.dat");
-        // for (ts::Index i_value = 0; i_value < 256; ++i_value) {
-        //     output << i_value << " " << final_histogram[i_value] << "\n";
-        // }
+
         for (ts::Index i_value = 0; i_value < 256; ++i_value) {
             //for (ts::Index i_chunk = 0; i_chunk < total_chunks; ++i_chunk) {
             for (ts::Index i_chunk = 0; i_chunk < total_chunks; ++i_chunk) {
@@ -511,14 +413,12 @@ int main(int argc, char** argv) {
 
     if (rank == 0) {
         compute_time += std::chrono::duration<double>(compute_end - compute_start).count();
-        //std::cout << compute_time << std::endl;
     }
 
     //MPI_Barrier(MPI_COMM_WORLD);
     auto total_end = std::chrono::high_resolution_clock::now();
     if (rank == 0) {
         total_time += std::chrono::duration<double>(total_end - total_start).count();
-        //std::cout << total_time << std::endl;
     }
 
     if (rank == 0) {
