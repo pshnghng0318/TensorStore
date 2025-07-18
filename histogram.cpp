@@ -220,7 +220,7 @@ int main(int argc, char** argv) {
             std::vector<float> chunk_data_ch1(chunk_elements);
 
             // For using TensorStore to open the uncompressed zarr
-            //compressor = true;
+            compressor = true;
 
             if (compressor == true) {
                 nlohmann::json chunk_spec = {
@@ -307,7 +307,13 @@ int main(int argc, char** argv) {
                             idx++;
                         }
                     }
-                    // chunk_data_ch1.resize(idx);
+                    
+                    // for (ts::Index i = 0; i < my_nx; ++i) {
+                    //     std::streampos offset = static_cast<std::streampos>(i) * shape_vec[3] * sizeof(float);
+                    //     file.seekg(offset, std::ios::beg);
+                    //     float* src_ptr = chunk_data_ch1.data() + i * my_ny;
+                    //     file.read(reinterpret_cast<char*>(src_ptr), my_ny * sizeof(float));
+                    // }
                 }
             }
         
