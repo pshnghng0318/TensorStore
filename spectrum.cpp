@@ -337,10 +337,8 @@ int main(int argc, char** argv) {
                 float value = chunk_data_ch1[i];
 
                 if (!std::isnan(value)) {
-                    
                     long channel_index = (ch_start + i / (my_nx * my_ny));
-
-                    local_histogram[channel_index] += value;
+                    local_spectrum[channel_index] += value;
                     valid_pixels[channel_index] += 1;
                 }
             }
@@ -372,17 +370,16 @@ int main(int argc, char** argv) {
     if (rank == 0) {
         for (long c = 0; c < n_channels; ++c) {
             if (valid_pixels[c] > 0) {
-                std::cout << local_spectrum[c] << " " << valid_pixels[c] << std::endl;
                 local_spectrum[c] /= valid_pixels[c];
-                //std::cout << local_spectrum[c] << std::endl;
             }    
         }
     }
 
     // Reduce the local spectrum to a global spectrum
     std::vector<double> global_spectrum(n_channels, 0.0); // Initialize a global spectrum
+    std::vector<long> global_valid(n_channels, 0.0); // Initialize a global valid
     MPI_Reduce(local_spectrum.data(), global_spectrum.data(), n_channels, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-
+    MPI_Reduce(valid_pixels.data(), global_valid.data(), n_channels, MPI_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
     // if (rank == 0) {
     //     // final min and max
     //     float final_max = -1;
@@ -424,8 +421,12 @@ int main(int argc, char** argv) {
         for (long c = 0; c < n_channels; ++c) {
             specout << c << "\t" << global_spectrum[c] << "\n";
         }
+        std::ofstream vadcout("valid_mpi.dat");
+        for (long c = 0; c < n_channels; ++c) {
+            vadcout << c << "\t" << global_valid[c] << "\n";
+        }
         specout.close();
-        //std::cout << "Spectrum written to spectrum_mpi.dat\n";
+        vadcout.close();
     }
 
     //MPI_Barrier(MPI_COMM_WORLD);
