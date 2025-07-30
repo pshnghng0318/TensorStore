@@ -35,3 +35,12 @@ target_link_libraries(histogram
 #target_include_directories(read_zarr PRIVATE ${MPI_CXX_INCLUDE_DIRS})
 target_include_directories(histogram PRIVATE ${MPI_CXX_INCLUDE_DIRS})
 
+
+add_executable(spectrum spectrum.cpp)
+target_link_libraries(spectrum
+  PRIVATE
+    tensorstore::tensorstore
+    tensorstore::all_drivers
+    MPI::MPI_CXX
+)
+target_include_directories(spectrum PRIVATE ${MPI_CXX_INCLUDE_DIRS})
