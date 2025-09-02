@@ -15,7 +15,6 @@
 // Extracts a slice of a volumetric dataset, outputting it as a 2d image.
 //
 // extract_slice --output_file=/tmp/foo.jpg --input_spec=...
-// Modified by Po-Sheng Huang for reading 5D float32 zarr files
 
 #include <stdint.h>
 
